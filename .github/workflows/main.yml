@@ -1,107 +1,30 @@
-
-name: RDP
-
-on:
-  workflow_dispatch:
-
+name: rdp
+on: workflow_dispatch
 jobs:
-  secure-rdp:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 3600
-
+    timeout-minutes: 360
     steps:
-      - name: Configure Core RDP Settings
-        shell: pwsh
+      - name: RDP User Banao
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
+          net user rdp Jutt5566@ /add
+          net localgroup administrators rdp /add
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+      - name: Chrome Install
+        run: choco install googlechrome -y
 
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389
-
-          Restart-Service -Name TermService -Force
-
-      - name: Create RDP User with Fixed Credentials
-        shell: pwsh
+      - name: AdsPower Install
         run: |
-          $username = "rdp"
-          $password = "jutt5566@"
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          Invoke-WebRequest -Uri "https://download.adspower.net/software/AdsPower_Setup.exe" -OutFile "$env:TEMP\AdsPower.exe"
+          Start-Process "$env:TEMP\AdsPower.exe" -ArgumentList "/S" -Wait
 
-          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
-              Set-LocalUser -Name $username -Password $securePass
-          }
-          else {
-              New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
-          }
-
-          Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
-
-          echo "RDP_CREDS=User: jutt | Password: jutt" >> $env:GITHUB_ENV
-
-          if (-not (Get-LocalUser -Name $username)) {
-              Write-Error "User creation failed"
-              exit 1
-          }
-
-      - name: Install Tailscale
-        shell: pwsh
+      - name: Tailscale Connect
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
+          choco install tailscale -y
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=APNI_TAILSCALE_KEY_YAHAN_DALO --hostname=my-rdp --accept-routes
+          & "C:\Program Files\Tailscale\tailscale.exe" ip -4
 
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-
-      - name: Establish Tailscale Connection
-        shell: pwsh
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
-
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-      - name: Verify RDP Accessibility
-        shell: pwsh
-        run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
-
-      - name: Maintain Connection
-        shell: pwsh
-        run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: rdp"
-          Write-Host "Password: jutt5566@"
-          Write-Host "==================`n"
-
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
-              Start-Sleep -Seconds 300
-          }
+      - name: RDP On Rakho
+        run: Start-Sleep -Seconds 21000
