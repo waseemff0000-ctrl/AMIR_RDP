@@ -1,25 +1,96 @@
-name: rdp
-on: workflow_dispatch
+name: RDP
+on:
+  workflow_dispatch:
 jobs:
-  build:
+  secure-rdp:
     runs-on: windows-2022
     timeout-minutes: 360
     steps:
-      - name: Fast RDP Setup
+      - name: Fast Windows + RDP Settings
+        shell: pwsh
         run: |
-          net user rdp Jutt5566@ /add
-          net localgroup administrators rdp /add
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          echo "Chrome pehle se installed hai, is liye dobara install nahi kar rahe"
+          # RDP On
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          
+          # --- SPEED BOOST - Windows 10 jaisa Fast ---
+          # Animation, Transparency, Wallpaper band
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "UserPreferencesMask" -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) -Force
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name "VisualFXSetting" -Value 2 -Force
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "WallPaper" -Value "" -Force
+          # Best Performance Mode
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          # RDP Low Bandwidth - Signal kam bhi ho to hang nahi hoga
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxCompressionLevel" -Value 2 -Force
 
-      - name: Tailscale Fast Connect
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" -ErrorAction SilentlyContinue
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User
+        shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
-          Start-Process msiexec.exe -ArgumentList "/i $env:TEMP\tailscale.msi /quiet /norestart" -Wait
-          Start-Sleep -Seconds 10
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=APNI_TAILSCALE_KEY_YAHAN_DALO --hostname=my-rdp
-          & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+          $username = "RDP"
+          $password = "jutt5566@"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          $existingUser = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+          if ($existingUser) { Set-LocalUser -Name $username -Password $securePass } else { New-LocalUser -Name $username -Password $securePass -AccountNeverExpires }
+          Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
+          "RDP_USERNAME=$username" >> $env:GITHUB_ENV
+          "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+          Write-Host "RDP user ready"
 
-      - name: RDP On Rakho
-        run: Start-Sleep -Seconds 21000
+      - name: Install Only 3 Apps - Fast Way
+        shell: pwsh
+        run: |
+          # Chrome pehle se hai, check karo
+          if (-not (Get-Command chrome -ErrorAction SilentlyContinue)) { choco install googlechrome -y --no-progress } else { Write-Host "Chrome pehle se hai, skip" }
+
+          Write-Host "Installing GoLogin..."
+          try {
+            Invoke-WebRequest -Uri "https://dl.gologin.com/gologin.exe" -OutFile "$env:TEMP\GoLogin.exe" -UseBasicParsing
+            Start-Process "$env:TEMP\GoLogin.exe" -ArgumentList "/S" -Wait
+          } catch { Write-Host "GoLogin fail, RDP me manual kar lena" }
+
+          Write-Host "Installing AdsPower..."
+          try {
+            winget install --id=AdsPower.AdsPower -e --accept-source-agreements --accept-package-agreements --silent
+          } catch { Write-Host "AdsPower fail, RDP me manual kar lena" }
+
+      - name: Install Tailscale
+        shell: pwsh
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile "$env:TEMP\tailscale.msi"
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$env:TEMP\tailscale.msi`"", "/quiet", "/norestart" -Wait
+
+      - name: Establish Tailscale Connection
+        shell: pwsh
+        run: |
+          # Direct Connect - Relay band, Speed zyada
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID --accept-routes --advertise-tags=tag:rdp
+          $tsIP = $null; $retries = 0
+          while (-not $tsIP -and $retries -lt 10) { $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; Start-Sleep -Seconds 5; $retries++ }
+          if (-not $tsIP) { throw "Tailscale IP not assigned" }
+          $tsIP = ($tsIP | Select-Object -First 1).Trim()
+          "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Verify RDP
+        shell: pwsh
+        run: |
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) { throw "TCP 3389 failed" }
+          Write-Host "TCP OK!"
+
+      - name: Maintain Connection
+        shell: pwsh
+        run: |
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: $env:RDP_USERNAME"
+          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host "==================`n"
+          while ($true) { Write-Host "[$(Get-Date)] RDP Active - Fast Mode"; Start-Sleep -Seconds 300 }
