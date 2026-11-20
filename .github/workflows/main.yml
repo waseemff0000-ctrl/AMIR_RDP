@@ -2,28 +2,23 @@ name: rdp
 on: workflow_dispatch
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 360
     steps:
-      - name: RDP User Banao
+      - name: Fast RDP Setup
         run: |
           net user rdp Jutt5566@ /add
           net localgroup administrators rdp /add
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          echo "Chrome pehle se installed hai, is liye dobara install nahi kar rahe"
 
-      - name: Chrome Install
-        run: choco install googlechrome -y
-
-      - name: AdsPower Install
+      - name: Tailscale Fast Connect
         run: |
-          Invoke-WebRequest -Uri "https://download.adspower.net/software/AdsPower_Setup.exe" -OutFile "$env:TEMP\AdsPower.exe"
-          Start-Process "$env:TEMP\AdsPower.exe" -ArgumentList "/S" -Wait
-
-      - name: Tailscale Connect
-        run: |
-          choco install tailscale -y
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=APNI_TAILSCALE_KEY_YAHAN_DALO --hostname=my-rdp --accept-routes
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\tailscale.msi"
+          Start-Process msiexec.exe -ArgumentList "/i $env:TEMP\tailscale.msi /quiet /norestart" -Wait
+          Start-Sleep -Seconds 10
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=APNI_TAILSCALE_KEY_YAHAN_DALO --hostname=my-rdp
           & "C:\Program Files\Tailscale\tailscale.exe" ip -4
 
       - name: RDP On Rakho
