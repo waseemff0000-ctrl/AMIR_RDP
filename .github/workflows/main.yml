@@ -1,3 +1,4 @@
+
 name: RDP
 
 on:
@@ -6,80 +7,50 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 3600
 
     steps:
       - name: Configure Core RDP Settings
         shell: pwsh
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-            -Name "fDenyTSConnections" -Value 0 -Force
+                             -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name "UserAuthentication" -Value 0 -Force
+                             -Name "UserAuthentication" -Value 1 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name "SecurityLayer" -Value 0 -Force
+                             -Name "SecurityLayer" -Value 1 -Force
 
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
 
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389
+            dir=in action=allow protocol=TCP localport=3389 `
+            remoteip=100.64.0.0/10
 
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Fixed Password
+      - name: Create RDP User with Fixed Credentials
         shell: pwsh
         run: |
           $username = "RDP"
           $password = "jutt5566@"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
-          $existingUser = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
-
-          if ($existingUser) {
+          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
               Set-LocalUser -Name $username -Password $securePass
-          } else {
+          }
+          else {
               New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
           }
 
           Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
 
-          "RDP_USERNAME=$username" >> $env:GITHUB_ENV
-          "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-
           if (-not (Get-LocalUser -Name $username)) {
-              throw "RDP user creation failed"
+              Write-Error "User creation failed"
+              exit 1
           }
 
-          Write-Host "RDP user configured successfully."
-
-      - name: Install Only 3 Apps - Chrome, GoLogin, AdsPower
-        shell: pwsh
-        run: |
-          Write-Host "Installing Chrome..."
-          choco install googlechrome -y --no-progress
-
-          Write-Host "Installing GoLogin..."
-          try {
-            $goUrl = "https://dl.gologin.com/gologin.exe"
-            Invoke-WebRequest -Uri $goUrl -OutFile "$env:TEMP\GoLogin.exe" -UseBasicParsing
-            Start-Process "$env:TEMP\GoLogin.exe" -ArgumentList "/S" -Wait -ErrorAction SilentlyContinue
-            Write-Host "GoLogin Installed"
-          } catch {
-            Write-Host "Direct GoLogin failed, trying winget..."
-            winget install --id=GoLogin.GoLogin -e --accept-source-agreements --accept-package-agreements --silent
-          }
-
-          Write-Host "Installing AdsPower..."
-          try {
-            winget install --id=AdsPower.AdsPower -e --accept-source-agreements --accept-package-agreements --silent
-          } catch {
-            Write-Host "Winget AdsPower failed, trying direct download..."
-            $adsUrl = "https://download.adspower.com/AdsPower-Setup.exe"
-            Invoke-WebRequest -Uri $adsUrl -OutFile "$env:TEMP\AdsPower.exe" -UseBasicParsing
-            Start-Process "$env:TEMP\AdsPower.exe" -ArgumentList "/S" -Wait -ErrorAction SilentlyContinue
-          }
-          Write-Host "Only 3 Apps Installed Successfully"
+          Write-Host "RDP user created successfully"
 
       - name: Install Tailscale
         shell: pwsh
@@ -106,11 +77,11 @@ jobs:
           }
 
           if (-not $tsIP) {
-              throw "Tailscale IP not assigned. Exiting."
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
           }
 
-          $tsIP = ($tsIP | Select-Object -First 1).Trim()
-          "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
       - name: Verify RDP Accessibility
         shell: pwsh
@@ -120,7 +91,8 @@ jobs:
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
 
           if (-not $testResult.TcpTestSucceeded) {
-              throw "TCP connection to RDP port 3389 failed"
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
           }
 
           Write-Host "TCP connectivity successful!"
@@ -130,11 +102,11 @@ jobs:
         run: |
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: $env:RDP_USERNAME"
-          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host "Username: RDP"
+          Write-Host "Password: jutt5566@"
           Write-Host "==================`n"
 
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use workflow cancellation to terminate"
+              Write-Host "[$(Get-Date)] RDP Active"
               Start-Sleep -Seconds 300
           }
